@@ -1,5 +1,7 @@
-use hashbrown::HashMap;
-use std::fmt::Debug;
+use hashbrown::{HashMap, HashSet};
+use std::{cmp::Ordering, fmt::Debug};
+
+pub mod sudoku;
 
 type Universe = i32;
 type Evaluation = Box<dyn Fn(&mut dyn Iterator<Item = Universe>) -> bool>;
@@ -112,7 +114,7 @@ impl NormalizedProblem {
                  }| PropagatedProblem {
                     variables,
                     domains,
-                    constraints: constraints.into_iter().collect(),
+                    constraints: Self::sort_constraints(constraints.into_iter().collect()),
                 },
             )
     }
@@ -183,6 +185,32 @@ impl NormalizedProblem {
         }
         self
     }
+    fn sort_constraints(
+        mut constraints: Vec<(Vec<Variable>, Evaluation)>,
+    ) -> Vec<(Vec<Variable>, Evaluation)> {
+        constraints.sort_unstable_by(|(scope_a, _), (scope_b, _)| {
+            let mut rev_a = scope_a.iter().rev();
+            let mut rev_b = scope_b.iter().rev();
+            loop {
+                let a = rev_a.next().map(|v| v.id);
+                let b = rev_b.next().map(|v| v.id);
+
+                match (a, b) {
+                    (None, None) => return Ordering::Equal,
+                    (None, Some(_)) => return Ordering::Less,
+                    (Some(_), None) => return Ordering::Greater,
+                    (Some(a), Some(b)) => {
+                        if a == b {
+                            continue;
+                        } else {
+                            return a.cmp(&b);
+                        }
+                    }
+                }
+            }
+        });
+        constraints
+    }
 }
 
 pub struct PropagatedProblem {
@@ -191,6 +219,7 @@ pub struct PropagatedProblem {
     pub constraints: Vec<(Vec<Variable>, Evaluation)>,
 }
 
+// Based on https://en.wikipedia.org/wiki/Backtracking and https://www.geeksforgeeks.org/sudoku-backtracking-7/
 impl PropagatedProblem {
     pub fn solve_backtracking(&self) -> Option<Vec<Universe>> {
         let mut candidate: Candidate = vec![None; self.variables.len()];
@@ -280,4 +309,157 @@ impl PropagatedProblem {
     }
 }
 
-pub mod sudoku;
+// CBJ based on https://cse.unl.edu/~choueiry/Documents/Hybrid-Prosser.pdf
+// (HYBRID ALGORITHMS FOR THE CONSTRAINT SATISFACTION PROBLEM PATRICK PROSS)
+// impl PropagatedProblem {
+//     pub fn solve_cbj(&mut self) -> Option<Vec<Universe>> {
+//         let mut vals = vec![0; self.variables.len()];
+//         let mut current_domain = self.domains.iter().map(|dom| dom.values.clone()).collect();
+//         let mut conf_set: Vec<HashSet<usize>> = vec![HashSet::new(); self.variables.len()];
+//         let mut status = Status::Unknown;
+
+//         self.cbj_bcssp(&mut vals, &mut current_domain, &mut conf_set, &mut status);
+
+//         if status == Status::Solution {
+//             Some(vals)
+//         } else {
+//             None
+//         }
+//     }
+
+//     fn cbj_bcssp(
+//         &mut self,
+//         vals: &mut Vec<Universe>,
+//         current_domain: &mut Vec<Vec<Universe>>,
+//         conf_set: &mut Vec<HashSet<usize>>,
+//         status: &mut Status,
+//     ) {
+//         let mut consistent = true;
+//         *status = Status::Unknown;
+//         let mut i = 0;
+//         let n = self.variables.len();
+
+//         while *status == Status::Unknown {
+//             if consistent {
+//                 i = self.cbj_label(i, vals, current_domain, conf_set, &mut consistent);
+//             } else {
+//                 i = self.cbj_unlabel(i, &mut consistent);
+//             }
+//             if i >= n {
+//                 *status = Status::Solution;
+//             } else if i == 0 {
+//                 *status = Status::Impossible;
+//             }
+//         }
+//     }
+//     fn cbj_label(
+//         &self,
+//         i: usize,
+//         vals: &mut Vec<Universe>,
+//         current_domain: &mut Vec<Vec<Universe>>,
+//         conf_set: &mut Vec<HashSet<usize>>,
+//         consistent: &mut bool,
+//     ) -> usize {
+//         *consistent = false;
+//         for &val in &current_domain[i] {
+//             vals[i] = val;
+//         }
+
+//         todo!()
+//     }
+//     fn cbj_unlabel(&self, i: usize, consistent: &mut bool) -> usize {}
+// }
+
+// #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// enum Status {
+//     Unknown,
+//     Solution,
+//     Impossible,
+// }
+
+// Based on https://ics.uci.edu/~dechter/books/chapter06.pdf figure 6.7
+impl PropagatedProblem {
+    pub fn solve_cbj(&self) -> Option<Vec<Universe>> {
+        let mut i: usize = 0;
+        let n = self.variables.len();
+        let mut curr_domain: Vec<Vec<Universe>> =
+            self.domains.iter().map(|dom| dom.values.clone()).collect();
+        let mut conf_set: Vec<HashSet<usize>> = vec![HashSet::new(); n];
+        let mut vals: Candidate = vec![None; n];
+
+        while i < n {
+            vals[i] = self.select_val_cbj(i, &mut curr_domain, &mut conf_set, &mut vals);
+
+            if vals[i].is_none() {
+                let i_prev = i;
+                let max = conf_set[i].iter().max();
+                if let Some(&max) = max {
+                    i = max;
+                    let b = conf_set[i_prev].clone();
+                    conf_set[i].extend(&b);
+                    conf_set[i].remove(&i);
+                } else {
+                    return None;
+                }
+            } else {
+                i += 1;
+                if i == n {
+                    break;
+                }
+                self.domains[i].values.clone_into(&mut curr_domain[i]);
+                conf_set[i].clear();
+            }
+        }
+
+        vals.into_iter().collect()
+    }
+
+    fn select_val_cbj(
+        &self,
+        i: usize,
+        curr_domain: &mut Vec<Vec<Universe>>,
+        conf_set: &mut Vec<HashSet<usize>>,
+        vals: &mut Candidate,
+    ) -> Option<Universe> {
+        while let Some(a) = curr_domain[i].pop() {
+            vals[i] = Some(a);
+            let mut consistent = true;
+            let mut k = 0;
+            while k < i && consistent {
+                let mut to_check = self.constraints.iter().filter(|(scope, _)| {
+                    let len = scope.len();
+                    len >= 2 && scope[len - 1].id == i && scope[len - 2].id == k
+                });
+
+                let mut curr_constraint = to_check.next();
+                while let Some((scope, eval)) = curr_constraint {
+                    let mut vals_needed = scope.iter().map(|var| vals[var.id].unwrap());
+                    if !eval(&mut vals_needed) {
+                        break;
+                    } else {
+                        curr_constraint = to_check.next();
+                    }
+                }
+                if curr_constraint.is_none() {
+                    // Passed all consistency checks
+                    k += 1;
+                } else {
+                    let (scope, _) = curr_constraint.unwrap();
+                    conf_set[i].extend(scope.iter().filter_map(|var| {
+                        if var.id != i {
+                            Some(var.id)
+                        } else {
+                            None
+                        }
+                    }));
+                    consistent = false;
+                }
+            }
+            if consistent {
+                return Some(a);
+            }
+        }
+
+        None
+    }
+}
