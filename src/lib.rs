@@ -2,8 +2,8 @@ use hashbrown::HashMap;
 use std::fmt::Debug;
 
 type Universe = i32;
-type Evaluation = Box<dyn Fn(&Vec<Universe>) -> bool>;
-type Candidate = Vec<Universe>;
+type Evaluation = Box<dyn Fn(&mut dyn Iterator<Item = Universe>) -> bool>;
+type Candidate = Vec<Option<Universe>>;
 
 pub struct Constraint {
     pub scope: Vec<Variable>,
@@ -123,7 +123,7 @@ impl NormalizedProblem {
             let domain = &mut self.domains[i].values;
 
             if let Some(eval) = self.constraints.remove(&vec![var]) {
-                domain.retain(|&vx| eval(&vec![vx]));
+                domain.retain(|&vx| eval(&mut [vx].into_iter()));
             }
         }
 
@@ -169,7 +169,7 @@ impl NormalizedProblem {
             if !self.domains[y.id].values.iter().any(|&vy| {
                 self.constraints
                     .get(&vec![x, y])
-                    .is_some_and(|eval| eval(&vec![vx, vy]))
+                    .is_some_and(|eval| eval(&mut [vx, vy].into_iter()))
             }) {
                 self.domains[x.id].values.retain(|&vxx| vxx != vx);
                 change = true;
@@ -192,31 +192,43 @@ pub struct PropagatedProblem {
 }
 
 impl PropagatedProblem {
-    pub fn solve_backtracking(&self) -> Option<Candidate> {
-        self.backtrack(&Vec::new())
+    pub fn solve_backtracking(&self) -> Option<Vec<Universe>> {
+        let mut candidate: Candidate = vec![None; self.variables.len()];
+        if self.backtrack(&mut candidate, 0) {
+            candidate.into_iter().collect()
+        } else {
+            None
+        }
     }
-    fn backtrack(&self, candidate: &Candidate) -> Option<Candidate> {
-        if self.reject(candidate) {
-            return None;
+    fn backtrack(&self, candidate: &mut Candidate, k: usize) -> bool {
+        // for _ in 0..k {
+        //     print!("-");
+        // }
+        // println!();
+
+        if self.reject(candidate, k) {
+            return false;
         }
         if self.accept(candidate) {
-            return Some(candidate.clone());
+            return true;
         }
-        let mut s = self.first(candidate);
-        while let Some(ss) = s {
-            let solution = self.backtrack(&ss);
-            if solution.is_some() {
-                return solution;
+
+        let mut s = self.first(candidate, k);
+        while s {
+            let res = self.backtrack(candidate, k + 1);
+            if res {
+                return true;
             }
 
-            s = self.next(&ss);
+            s = self.next(candidate, k + 1);
         }
 
-        None
+        candidate[k] = None;
+        false
     }
     /// Returns true if candidate values are inconsistent with constraints
-    fn reject(&self, candidate: &Candidate) -> bool {
-        let k = candidate.len();
+    fn reject(&self, candidate: &Candidate, k: usize) -> bool {
+        // let k = candidate.len();
         if k == 0 {
             return false;
         }
@@ -229,8 +241,8 @@ impl PropagatedProblem {
             .filter(|constraint| constraint.0.last() == Some(&curr_var));
 
         for constraint in to_check {
-            let vals_needed = constraint.0.iter().map(|var| candidate[var.id]).collect();
-            if !constraint.1(&vals_needed) {
+            let mut vals_needed = constraint.0.iter().map(|var| candidate[var.id].unwrap());
+            if !constraint.1(&mut vals_needed) {
                 return true;
             }
         }
@@ -239,36 +251,32 @@ impl PropagatedProblem {
     }
     /// Returns true if candidate values are consistent and complete with constraints
     fn accept(&self, candidate: &Candidate) -> bool {
-        candidate.len() == self.variables.len()
+        candidate[candidate.len() - 1].is_some()
     }
-    fn first(&self, candidate: &Candidate) -> Option<Candidate> {
-        let k = candidate.len();
-        if k == self.variables.len() {
-            None
+    fn first(&self, candidate: &mut Candidate, k: usize) -> bool {
+        // let k = candidate.len();
+        if candidate.last().is_some_and(|x| x.is_some()) {
+            false
         } else {
             let first_val_next_var = self.domains[k].values[0];
-            let mut next_cand = candidate.clone();
-            next_cand.push(first_val_next_var);
-            Some(next_cand)
+            // let mut next_cand = candidate.clone();
+            // next_cand.push(first_val_next_var);
+            // Some(next_cand)
+            candidate[k] = Some(first_val_next_var);
+
+            true
         }
     }
-    fn next(&self, candidate: &Candidate) -> Option<Candidate> {
-        let k = candidate.len();
-        if candidate.last() == self.domains[k - 1].values.last() {
-            return None;
+    fn next(&self, candidate: &mut Candidate, k: usize) -> bool {
+        // let k = candidate.len();
+        if candidate[k - 1] == self.domains[k - 1].values.last().copied() {
+            return false;
         }
 
-        if let Some(curr_val) = candidate.last() {
-            let mut new_cand = candidate.clone();
-            if let Ok(i) = self.domains[k - 1].values.binary_search(curr_val) {
-                new_cand[k - 1] = self.domains[k - 1].values[i + 1];
-                Some(new_cand)
-            } else {
-                None
-            }
-        } else {
-            None
-        }
+        let curr_val = candidate[k - 1].unwrap();
+        let i = self.domains[k - 1].values.binary_search(&curr_val).unwrap();
+        candidate[k - 1] = Some(self.domains[k - 1].values[i + 1]);
+        true
     }
 }
 
