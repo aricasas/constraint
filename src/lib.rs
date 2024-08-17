@@ -417,8 +417,8 @@ impl PropagatedProblem {
     fn select_val_cbj(
         &self,
         i: usize,
-        curr_domain: &mut Vec<Vec<Universe>>,
-        conf_set: &mut Vec<HashSet<usize>>,
+        curr_domain: &mut [Vec<Universe>],
+        conf_set: &mut [HashSet<usize>],
         vals: &mut Candidate,
     ) -> Option<Universe> {
         while let Some(a) = curr_domain[i].pop() {
@@ -426,25 +426,13 @@ impl PropagatedProblem {
             let mut consistent = true;
             let mut k = 0;
             while k < i && consistent {
-                let mut to_check = self.constraints.iter().filter(|(scope, _)| {
-                    let len = scope.len();
-                    len >= 2 && scope[len - 1].id == i && scope[len - 2].id == k
-                });
+                let broken_constraint = self.search_broken_constraint(i, k, vals);
 
-                let mut curr_constraint = to_check.next();
-                while let Some((scope, eval)) = curr_constraint {
-                    let mut vals_needed = scope.iter().map(|var| vals[var.id].unwrap());
-                    if !eval(&mut vals_needed) {
-                        break;
-                    } else {
-                        curr_constraint = to_check.next();
-                    }
-                }
-                if curr_constraint.is_none() {
+                if broken_constraint.is_none() {
                     // Passed all consistency checks
                     k += 1;
                 } else {
-                    let (scope, _) = curr_constraint.unwrap();
+                    let scope = broken_constraint.unwrap();
                     conf_set[i].extend(scope.iter().filter_map(|var| {
                         if var.id != i {
                             Some(var.id)
@@ -462,4 +450,33 @@ impl PropagatedProblem {
 
         None
     }
+
+    fn search_broken_constraint(
+        &self,
+        i: usize,
+        k: usize,
+        vals: &Candidate,
+    ) -> Option<&Vec<Variable>> {
+        let mut broken_constraint = None;
+        for (scope, eval) in &self.constraints {
+            let len = scope.len();
+            if scope[len - 1].id > i {
+                break;
+            }
+
+            if !(len >= 2 && scope[len - 1].id == i && scope[len - 2].id == k) {
+                continue;
+            }
+
+            let mut vals_needed = scope.iter().map(|var| vals[var.id].unwrap());
+            if !eval(&mut vals_needed) {
+                broken_constraint = Some(scope);
+                break;
+            }
+        }
+
+        broken_constraint
+    }
 }
+
+// https://cs.uwaterloo.ca/~vanbeek/Publications/jair01.pdf

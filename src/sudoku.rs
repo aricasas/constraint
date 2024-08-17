@@ -38,33 +38,33 @@ impl Sudoku {
             problem.add_constraint(row, Box::new(check_nine_distinct));
         }
         // No repeating in columns
-        // for x in 0..9 {
-        //     let column = (0..9).map(|y| Variable { id: 9 * y + x }).collect();
-        //     problem.add_constraint(column, Box::new(check_nine_distinct));
-        // }
+        for x in 0..9 {
+            let column = (0..9).map(|y| Variable { id: 9 * y + x }).collect();
+            problem.add_constraint(column, Box::new(check_nine_distinct));
+        }
 
         // No repeating in 3x3 squares
-        // for sy in 0..3 {
-        //     for sx in 0..3 {
-        //         let top_left = 9 * 3 * sy + 3 * sx;
-        //         let square = [
-        //             top_left,
-        //             top_left + 1,
-        //             top_left + 2,
-        //             top_left + 9,
-        //             top_left + 9 + 1,
-        //             top_left + 9 + 2,
-        //             top_left + 18,
-        //             top_left + 18 + 1,
-        //             top_left + 18 + 2,
-        //         ]
-        //         .into_iter()
-        //         .map(|i| Variable { id: i })
-        //         .collect();
+        for sy in 0..3 {
+            for sx in 0..3 {
+                let top_left = 9 * 3 * sy + 3 * sx;
+                let square = [
+                    top_left,
+                    top_left + 1,
+                    top_left + 2,
+                    top_left + 9,
+                    top_left + 9 + 1,
+                    top_left + 9 + 2,
+                    top_left + 18,
+                    top_left + 18 + 1,
+                    top_left + 18 + 2,
+                ]
+                .into_iter()
+                .map(|i| Variable { id: i })
+                .collect();
 
-        //         problem.add_constraint(square, Box::new(check_nine_distinct));
-        //     }
-        // }
+                problem.add_constraint(square, Box::new(check_nine_distinct));
+            }
+        }
 
         // Tiles that are set must use those values
         for (i, &num) in self.board.iter().enumerate() {
